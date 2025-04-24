@@ -96,7 +96,11 @@ steps:
         - run: kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/west/accessgrant.yaml
         - run: kubectl wait --for=condition=ready accessgrant/west-grant --timeout 300s
         - run: |
+            kubectl get accessgrant west-grant -o go-template-file=~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/token.template > ~/west.token
+          apply: test  
+        - run: |
             kubectl get accessgrant west-grant -o go-template-file=skupper-example-postgresql-attached-connector/kubernetes/token.template > ~/west.token
+          apply: readme
       "east":
         - run: kubectl apply -f ~/west.token
           output: |
