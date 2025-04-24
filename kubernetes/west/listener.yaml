@@ -1,10 +1,10 @@
 apiVersion: skupper.io/v2alpha1
-kind: Connector
+kind: Listener
 metadata:
   name: postgresql
-  namespace: private1
+  namespace: west
 spec:
+  host: postgresql
   port: 5432
   routingKey: postgresql
-  selector: application=postgresql
   type: tcp
