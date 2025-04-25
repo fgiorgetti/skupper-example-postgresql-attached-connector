@@ -1,0 +1,10 @@
+apiVersion: skupper.io/v2alpha1
+kind: AttachedConnector
+metadata:
+  name: postgresql-company-a
+  namespace: internal
+spec:
+  port: 5432
+  selector: application=postgresql
+  siteNamespace: private-company-a
+  type: tcp

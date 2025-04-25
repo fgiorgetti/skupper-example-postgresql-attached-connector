@@ -1,8 +1,8 @@
 apiVersion: skupper.io/v2alpha1
 kind: AttachedConnectorBinding
 metadata:
-  name: postgresql-east
-  namespace: east
+  name: postgresql-company-b
+  namespace: private-company-b
 spec:
-  connectorNamespace: east-internal
+  connectorNamespace: internal
   routingKey: postgresql

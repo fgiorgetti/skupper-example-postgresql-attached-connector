@@ -1,10 +1,10 @@
 apiVersion: skupper.io/v2alpha1
 kind: AttachedConnector
 metadata:
-  name: postgresql-east
-  namespace: east-internal
+  name: postgresql-company-b
+  namespace: internal
 spec:
   port: 5432
   selector: application=postgresql
-  siteNamespace: east
+  siteNamespace: private-company-b
   type: tcp

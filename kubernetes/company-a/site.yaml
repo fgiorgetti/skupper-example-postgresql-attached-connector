@@ -1,7 +1,7 @@
 apiVersion: skupper.io/v2alpha1
 kind: Site
 metadata:
-  name: west
-  namespace: west
+  name: company-a
+  namespace: company-a
 spec:
   linkAccess: default

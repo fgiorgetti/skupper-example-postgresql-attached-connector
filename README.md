@@ -1,10 +1,10 @@
 <!-- NOTE: This file is generated from skewer.yaml.  Do not edit it directly. -->
 
-# Sharing a PostgreSQL database running on an internal namespace
+# Sharing a PostgreSQL database with distinct VANs
 
 [![main](https://github.com/fgiorgetti/skupper-example-postgresql-attached-connector/actions/workflows/main.yaml/badge.svg)](https://github.com/fgiorgetti/skupper-example-postgresql-attached-connector/actions/workflows/main.yaml)
 
-#### This tutorial demonstrates how to share a PostgreSQL database running on an internal namespace, without a Skupper site, across Kubernetes clusters that are located in different cloud providers.
+#### This tutorial demonstrates how to share a PostgreSQL database running on a namespace, without a Skupper site, with two distinct Virtual Application Networks.
 
 This example is part of a [suite of examples][examples] showing the
 different ways you can use [Skupper][website] to connect services
@@ -24,11 +24,11 @@ across cloud providers, data centers, and edge sites.
 * [Step 5: Create your sites](#step-5-create-your-sites)
 * [Step 6: Link your sites](#step-6-link-your-sites)
 * [Step 7: Deploy the PostgreSQL service](#step-7-deploy-the-postgresql-service)
-* [Step 8: Expose the PostgreSQL on the Virtual Application Network](#step-8-expose-the-postgresql-on-the-virtual-application-network)
-* [Step 9: Making the PostgreSQL database accessible to the west and east sites](#step-9-making-the-postgresql-database-accessible-to-the-west-and-east-sites)
+* [Step 8: Expose the PostgreSQL on the Virtual Application Networks](#step-8-expose-the-postgresql-on-the-virtual-application-networks)
+* [Step 9: Making the PostgreSQL database accessible to the each VAN](#step-9-making-the-postgresql-database-accessible-to-the-each-van)
 * [Step 10: Create pod with PostgreSQL client utilities](#step-10-create-pod-with-postgresql-client-utilities)
-* [Step 11: Create a database, a table and insert values](#step-11-create-a-database-a-table-and-insert-values)
-* [Step 12: Access the product table from any site](#step-12-access-the-product-table-from-any-site)
+* [Step 11: Create databases, a table and insert values](#step-11-create-databases-a-table-and-insert-values)
+* [Step 12: Access the product table from both sites](#step-12-access-the-product-table-from-both-sites)
 * [Cleaning up](#cleaning-up)
 * [Summary](#summary)
 * [Next steps](#next-steps)
@@ -36,12 +36,18 @@ across cloud providers, data centers, and edge sites.
 
 ## Overview
 
-In this tutorial, you will create a Virtual Application Nework (VAN) that enables communications across the west and east clusters.
-You will then deploy a PostgreSQL database instance to the **east-internal** namespace of a private cluster.
-This namespace is not connected to the Virtual Application Network so we use an **_Attached Connector_** to expose it into the VAN
-through the **east** namespace.
-This will enable clients on both private and public clusters attached to the Virtual Application Nework to transparently access the database
+In this tutorial, you will create two distinct Virtual Application Neworks (VANs) that enable communications across private and public clusters.
+
+You will then deploy a PostgreSQL database instance to a private cluster.
+The namespace where the database runs is not connected to any Virtual Application Network so we will use **_Attached Connectors_** to allow the
+database pods to be exposed by two distinct VANs, running in different namespaces within the same cluster.
+
+This will enable clients running alongside these separate Virtual Application Neworks to transparently access the database,
 without the need for additional networking setup (e.g. no vpn or sdn required).
+
+Here is an overview of the topology used by this example:
+
+<p align="center"><img src="images/diagram.png" width="640"/></p>
 
 ## Prerequisites
 
@@ -54,16 +60,17 @@ without the need for additional networking setup (e.g. no vpn or sdn required).
 [kube-providers]: https://skupper.io/start/kubernetes.html
 [install-kubectl]: https://kubernetes.io/docs/tasks/tools/install-kubectl/
 
-The basis for the demonstration is to depict the operation of a PostgreSQL database in a private cluster, on a namespace that is not connected
-to the Virtual Application Network but allows the **east** namespace to expose the pods that are running on the **east-internal** namespace.
-With that we provide access to the database from clients resident on any cluster connected to the VAN.
+The basis for the demonstration is to depict the operation of a PostgreSQL database in a private cloud cluster, on a namespace that is not connected
+to any Virtual Application Network, but allows two internal namespaces to expose the database pods into the distinct VANs they are connected with.
+
+With that, we provide access to the database from clients resident on any cluster connected to these two separate VANs.
 
 As an example, the cluster deployment might be comprised of:
 
-* A private cloud cluster running on your local machine (for **east** and **east-internal** namespaces)
-* A public cloud cluster running in a public cloud provider (for **west** namespace)
+* A private cloud cluster running on your local machine
+* Two public cloud clusters running on a public cloud provider
 
-While the detailed steps are not included here, this demonstration can alternatively be performed with three separate namespaces on a single cluster.
+While the detailed steps are not included here, this demonstration can alternatively be performed with five separate namespaces on a single cluster.
 
 ## Step 1: Access your Kubernetes clusters
 
@@ -82,24 +89,38 @@ For each cluster, open a new terminal window.  In each terminal,
 set the `KUBECONFIG` environment variable to a different path and
 log in to your cluster.
 
-_**West namespace on public cluster:**_
+_**Company A public cluster:**_
 
 ~~~ shell
-export KUBECONFIG=$PWD/kubeconfigs/west.config
+export KUBECONFIG=$PWD/kubeconfigs/company-a.config
 <provider-specific login command>
 ~~~
 
-_**East namespace on private cluster:**_
+_**Company A private cluster:**_
 
 ~~~ shell
-export KUBECONFIG=$PWD/kubeconfigs/east.config
+export KUBECONFIG=$PWD/kubeconfigs/private-company-a.config
 <provider-specific login command>
 ~~~
 
-_**East internal namespace on private cluster:**_
+_**Company B public cluster:**_
 
 ~~~ shell
-export KUBECONFIG=$PWD/kubeconfigs/east-internal.config
+export KUBECONFIG=$PWD/kubeconfigs/company-b.config
+<provider-specific login command>
+~~~
+
+_**Company B private cluster:**_
+
+~~~ shell
+export KUBECONFIG=$PWD/kubeconfigs/private-company-b.config
+<provider-specific login command>
+~~~
+
+_**Internal namespace on private cluster:**_
+
+~~~ shell
+export KUBECONFIG=$PWD/kubeconfigs/internal.config
 <provider-specific login command>
 ~~~
 
@@ -114,19 +135,31 @@ controller.
 For each cluster, use `kubectl apply` with the Skupper
 installation YAML to install the CRDs and controller.
 
-_**West namespace on public cluster:**_
+_**Company A public cluster:**_
 
 ~~~ shell
 kubectl apply -f https://skupper.io/v2/install.yaml
 ~~~
 
-_**East namespace on private cluster:**_
+_**Company A private cluster:**_
 
 ~~~ shell
 kubectl apply -f https://skupper.io/v2/install.yaml
 ~~~
 
-_**East internal namespace on private cluster:**_
+_**Company B public cluster:**_
+
+~~~ shell
+kubectl apply -f https://skupper.io/v2/install.yaml
+~~~
+
+_**Company B private cluster:**_
+
+~~~ shell
+kubectl apply -f https://skupper.io/v2/install.yaml
+~~~
+
+_**Internal namespace on private cluster:**_
 
 ~~~ shell
 kubectl apply -f https://skupper.io/v2/install.yaml
@@ -142,32 +175,46 @@ For each cluster, use `kubectl create namespace` and `kubectl
 config set-context` to create the namespace you wish to use and
 set the namespace on your current context.
 
-_**West namespace on public cluster:**_
+_**Company A public cluster:**_
 
 ~~~ shell
-kubectl create namespace west
-kubectl config set-context --current --namespace west
+kubectl create namespace company-a
+kubectl config set-context --current --namespace company-a
 ~~~
 
-_**East namespace on private cluster:**_
+_**Company A private cluster:**_
 
 ~~~ shell
-kubectl create namespace east
-kubectl config set-context --current --namespace east
+kubectl create namespace private-company-a
+kubectl config set-context --current --namespace private-company-a
 ~~~
 
-_**East internal namespace on private cluster:**_
+_**Company B public cluster:**_
 
 ~~~ shell
-kubectl create namespace east-internal
-kubectl config set-context --current --namespace east-internal
+kubectl create namespace company-b
+kubectl config set-context --current --namespace company-b
+~~~
+
+_**Company B private cluster:**_
+
+~~~ shell
+kubectl create namespace private-company-b
+kubectl config set-context --current --namespace private-company-b
+~~~
+
+_**Internal namespace on private cluster:**_
+
+~~~ shell
+kubectl create namespace internal
+kubectl config set-context --current --namespace internal
 ~~~
 
 ## Step 4: Set up the demo
 
 On your local machine, make a directory for this tutorial and clone the example repo:
 
-_**West namespace on public cluster:**_
+_**Company A public cluster:**_
 
 ~~~ shell
 cd ~/
@@ -191,20 +238,37 @@ the outcome.
 
   [minikube-tunnel]: https://skupper.io/start/minikube.html#running-minikube-tunnel
 
-The **west** site definition sets `linkAccess: default`, because the **east** site will establish a Skupper link to **west**.
-This extra definition tells that the **west** site accepts incoming Skupper links from other sites using the default ingress
-type for the target cluster (_route_ when using OpenShift or _loadbalancer_ otherwise).
+The public site definitions for Company-A and Company-B, set `linkAccess: default`, because their respective private sites
+will establish a Skupper link to them, forming two separate VANs between the namespaces:
 
-_**West namespace on public cluster:**_
+* private-company-a -> company-a
+* private-company-b -> company-b
+
+This extra definition tells that the public sites accept incoming Skupper links from other sites, using the default ingress
+type for the target clusters (_route_ when using OpenShift or _loadbalancer_ otherwise).
+
+_**Company A public cluster:**_
 
 ~~~ shell
-kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/west/site.yaml
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-a/site.yaml
 ~~~
 
-_**East namespace on private cluster:**_
+_**Company A private cluster:**_
 
 ~~~ shell
-kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/east/site.yaml
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/private-company-a/site.yaml
+~~~
+
+_**Company B public cluster:**_
+
+~~~ shell
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-b/site.yaml
+~~~
+
+_**Company B private cluster:**_
+
+~~~ shell
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/private-company-b/site.yaml
 ~~~
 
 ## Step 6: Link your sites
@@ -214,33 +278,58 @@ Links serve as a transport for application connections and
 requests.
 
 Creating an AccessToken requires the creation of an AccessGrant first,
-on the target namespace (**west**), then we can consume the AccessGrant's status
-to write an AccessToken and apply if into the target cluster (**east**) using `kubectl apply`.
+on the public cluster, then we can consume the AccessGrant's status
+to write an AccessToken and apply it into the private cluster using `kubectl apply`.
+
+Since we are creating two distinct VANs, we need to create a separate AccessToken to each public cluster
+and apply them to the respective private cluster.
 
 **Note:** The link token is truly a *secret*.  Anyone who has the
 token can link to your site.  Make sure that only those you trust
 have access to it.
 
-_**West namespace on public cluster:**_
+_**Company A public cluster:**_
 
 ~~~ shell
-kubectl wait --for=condition=ready site/west --timeout 300s
-kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/west/accessgrant.yaml
-kubectl wait --for=condition=ready accessgrant/west-grant --timeout 300s
-kubectl get accessgrant west-grant -o go-template-file=skupper-example-postgresql-attached-connector/kubernetes/token.template > ~/west.token
+kubectl wait --for=condition=ready site/company-a --timeout 300s
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-a/accessgrant.yaml
+kubectl wait --for=condition=ready accessgrant/company-a-grant --timeout 300s
+kubectl get accessgrant company-a-grant -o go-template-file=skupper-example-postgresql-attached-connector/kubernetes/token.template > ~/company-a.token
 ~~~
 
-_**East namespace on private cluster:**_
+_**Company A private cluster:**_
 
 ~~~ shell
-kubectl apply -f ~/west.token
+kubectl apply -f ~/company-a.token
 ~~~
 
 _Sample output:_
 
 ~~~ console
-$ kubectl apply -f ~/west.token
-accesstoken.skupper.io/token-west-grant created
+$ kubectl apply -f ~/company-a.token
+accesstoken.skupper.io/token-company-a-grant created
+~~~
+
+_**Company B public cluster:**_
+
+~~~ shell
+kubectl wait --for=condition=ready site/company-b --timeout 300s
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-b/accessgrant.yaml
+kubectl wait --for=condition=ready accessgrant/company-b-grant --timeout 300s
+kubectl get accessgrant company-b-grant -o go-template-file=skupper-example-postgresql-attached-connector/kubernetes/token.template > ~/company-b.token
+~~~
+
+_**Company B private cluster:**_
+
+~~~ shell
+kubectl apply -f ~/company-b.token
+~~~
+
+_Sample output:_
+
+~~~ console
+$ kubectl apply -f ~/company-b.token
+accesstoken.skupper.io/token-company-b-grant created
 ~~~
 
 If your terminal sessions are on different machines, you may need
@@ -251,137 +340,138 @@ being issued.
 ## Step 7: Deploy the PostgreSQL service
 
 After creating the application router network, deploy the PostgreSQL service.
-The **east-internal** namespace on the private cluster will be used to deploy the PostgreSQL server.
-The **west** (public cluster) and the **east** (private cluster) namespaces will be used to enable client
-communications to the server running on the **east-internal** namespace of the private cluster.
+The **internal** namespace on the private cluster will be used to deploy the PostgreSQL server.
 
-_**East internal namespace on private cluster:**_
+The **Company A** and the **Company B** public and private clusters will be used to enable client
+communications to the server running on the **internal** namespace of the private cluster.
+
+_**Internal namespace on private cluster:**_
 
 ~~~ shell
-kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/east-internal/deployment-postgresql-svc.yaml
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/internal/deployment-postgresql-svc.yaml
 ~~~
 
 _Sample output:_
 
 ~~~ console
-$ kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/east-internal/deployment-postgresql-svc.yaml
+$ kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/internal/deployment-postgresql-svc.yaml
 secret/postgresql created
 deployment.apps/postgresql created
 ~~~
 
-## Step 8: Expose the PostgreSQL on the Virtual Application Network
+## Step 8: Expose the PostgreSQL on the Virtual Application Networks
 
-Now that the PostgreSQL is running in the **east-internal** namespace of the private cluster, we need to expose it into
-your Virtual Application Network (VAN).
+Now that the PostgreSQL is running in the **internal** namespace of the private cluster, we need to expose it into
+both distinct Virtual Application Networks (VANs).
 
-Remember that the **east-internal** namespace is not connected to the VAN, so workloads running there cannot be exposed by other namespaces.
+Remember that the **internal** namespace is not connected to any VAN, so workloads running there cannot be exposed by other namespaces.
 
-Skupper V2 allows exposing resources running on separate namespaces, as long as the target namespace (where the workloads are
-running) authorize specific namespaces to bind its pods by defining an **_AttachedConnector_**.
+Skupper V2 allows exposing resources from other namespaces, as long as the namespace where the workloads are
+running has an **_AttachedConnector_** definition, authorizing the source namespace, which is connected to a VAN, to bind it.
 
 The **_AttachedConnector_** must be defined at the namespace where the target workloads are running and it must specify:
 
-* The _selector_
-* The target _port_ and
+* The _selector_ (for target pods)
+* The target _port_ (of the respective pods), and,
 * The _siteNamespace_
 
-In this case, the _siteNamespace_ must be set to **east** which is the namespace in the private cluster which is connected to a VAN.
+In this case, the _siteNamespace_ must be set to namespace which is connected to a VAN.
 
-The **east** site must then define an **_AttachedConnectorBinding_** resource that has:
+In the authorized namespace (connected to a VAN), you must define an **_AttachedConnectorBinding_** resource that has:
 
-* The same name of the **_AttachedConnector_** defined on the **east-internal** namespace
-* A _routingKey_ to be used by participant VAN sites to access the database
-* The _connectorNamespace_ field set to **east-internal**
+* The same name of the **_AttachedConnector_** defined on the target namespace (where workloads are running)
+* A _routingKey_ to be used by the participant VAN sites to access the database
+* The _connectorNamespace_ field set to the namespace where the workloads are running
 
-If all the settings above match, the **East** site is allowed to expose the PostgreSQL pods running on the **east-internal** namespace.
+If all the settings above match, the site connected to a VAN, is allowed to expose the PostgreSQL pods running on the internal namespace.
 
-_**East internal namespace on private cluster:**_
+Since we are defining two separate VANs, we will need two separate pairs of Attached Connector + Attached Connector Binding.
+
+The **Attached Connectors** will be defined on the **internal** namespace of the private cluster, while the **Attached Connector Bindings**
+will be defined on the local namespaces connected to a VAN, therefore, one on **private-company-a** and the other on **private-company-b** namespaces.
+
+_**Internal namespace on private cluster:**_
 
 ~~~ shell
-kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/east-internal/attached-connector-east.yaml
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/internal/attached-connector-company-a.yaml
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/internal/attached-connector-company-b.yaml
 ~~~
 
 _Sample output:_
 
 ~~~ console
-$ kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/east-internal/attached-connector-east.yaml
-attachedconnector.skupper.io/postgresql-east created
+$ kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/internal/attached-connector-company-a.yaml
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/internal/attached-connector-company-b.yaml
+attachedconnector.skupper.io/postgresql-company-a created
+attachedconnector.skupper.io/postgresql-company-b created
 ~~~
 
-_**East namespace on private cluster:**_
+_**Company A private cluster:**_
 
 ~~~ shell
-kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/east/attached-connector-binding.yaml
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/private-company-a/attached-connector-binding.yaml
 ~~~
 
 _Sample output:_
 
 ~~~ console
-$ kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/east/attached-connector-binding.yaml
-attachedconnectorbinding.skupper.io/postgresql-east created
+$ kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/private-company-a/attached-connector-binding.yaml
+attachedconnectorbinding.skupper.io/postgresql-company-a created
 ~~~
 
-## Step 9: Making the PostgreSQL database accessible to the west and east sites
-
-In order to make the PostgreSQL database accessible to the **west** and **east** sites, we need to define a `Listener`
-on each site, which will produce a Kubernetes service on each cluster, connecting them with the database running on **east-internal**
-namespace of the private cluster.
-
-_**West namespace on public cluster:**_
+_**Company B private cluster:**_
 
 ~~~ shell
-kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/west/listener.yaml
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/private-company-b/attached-connector-binding.yaml
+~~~
+
+_Sample output:_
+
+~~~ console
+$ kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/private-company-b/attached-connector-binding.yaml
+attachedconnectorbinding.skupper.io/postgresql-company-b created
+~~~
+
+## Step 9: Making the PostgreSQL database accessible to the each VAN
+
+In order to make the PostgreSQL database accessible to each VAN, we need to define a `Listener` on each of the Public Sites,
+which will produce a Kubernetes service on each respective namespace, connecting them with the database running on the **internal**
+namespace of the private cluster transparently.
+
+_**Company A public cluster:**_
+
+~~~ shell
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-a/listener.yaml
 kubectl wait --for=condition=ready listener/postgresql --timeout 300s
 ~~~
 
 _Sample output:_
 
 ~~~ console
-$ kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/west/listener.yaml
+$ kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-a/listener.yaml
 listener.skupper.io/postgresql created
 ~~~
 
-_**East namespace on private cluster:**_
+_**Company B public cluster:**_
 
 ~~~ shell
-kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/east/listener.yaml
+kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-b/listener.yaml
 kubectl wait --for=condition=ready listener/postgresql --timeout 300s
 ~~~
 
 _Sample output:_
 
 ~~~ console
-$ kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/east/listener.yaml
+$ kubectl apply -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-b/listener.yaml
 listener.skupper.io/postgresql created
 ~~~
 
 ## Step 10: Create pod with PostgreSQL client utilities
 
-Create a pod named `pg-shell` on the west and east sites. This pod will be used to
-communicate with the PostgreSQL database from **west** (public cluster) and **east** (private cluter) namespaces.
+Create a pod named `pg-shell` on each Public site. This pod will be used to
+communicate with the PostgreSQL database from the public clusters' namespaces.
 
-_**West namespace on public cluster:**_
-
-~~~ shell
-kubectl run pg-shell --image quay.io/skupper/simple-pg \
---env="PGUSER=postgres" \
---env="PGPASSWORD=skupper" \
---env="PGHOST=postgresql" \
---command sleep infinity
-~~~
-
-_Sample output:_
-
-~~~ console
-$ kubectl run pg-shell --image quay.io/skupper/simple-pg \
---env="PGUSER=postgres" \
---env="PGPASSWORD=skupper" \
---env="PGHOST=postgresql" \
---command sleep infinity
-pod/pg-shell created
-~~~
-
-_**East namespace on private cluster:**_
+_**Company A public cluster:**_
 
 ~~~ shell
 kubectl run pg-shell --image quay.io/skupper/simple-pg \
@@ -402,27 +492,48 @@ $ kubectl run pg-shell --image quay.io/skupper/simple-pg \
 pod/pg-shell created
 ~~~
 
-## Step 11: Create a database, a table and insert values
-
-Now that we can access the PostgreSQL database from both west and east sites, let's create a database called **markets**,
-then create a table named **product** and load it with some data.
-
-_**West namespace on public cluster:**_
+_**Company B public cluster:**_
 
 ~~~ shell
-kubectl exec pg-shell -- createdb -e markets
-kubectl exec -i pg-shell -- psql -d markets < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/table.sql
-kubectl exec -i pg-shell -- psql -d markets < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/data.sql
+kubectl run pg-shell --image quay.io/skupper/simple-pg \
+--env="PGUSER=postgres" \
+--env="PGPASSWORD=skupper" \
+--env="PGHOST=postgresql" \
+--command sleep infinity
 ~~~
 
 _Sample output:_
 
 ~~~ console
-$ kubectl exec pg-shell -- createdb -e markets
-kubectl exec -i pg-shell -- psql -d markets < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/table.sql
-kubectl exec -i pg-shell -- psql -d markets < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/data.sql
+$ kubectl run pg-shell --image quay.io/skupper/simple-pg \
+--env="PGUSER=postgres" \
+--env="PGPASSWORD=skupper" \
+--env="PGHOST=postgresql" \
+--command sleep infinity
+pod/pg-shell created
+~~~
+
+## Step 11: Create databases, a table and insert values
+
+Now that we can access the PostgreSQL database from both VANs, let's create two databases called **company-a** and **company-b**,
+then create a table named **product**, in each, and load them with some data.
+
+_**Company A public cluster:**_
+
+~~~ shell
+kubectl exec pg-shell -- createdb -e company-a
+kubectl exec -i pg-shell -- psql -d company-a < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/company-a/table.sql
+kubectl exec -i pg-shell -- psql -d company-a < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/company-a/data.sql
+~~~
+
+_Sample output:_
+
+~~~ console
+$ kubectl exec pg-shell -- createdb -e company-a
+kubectl exec -i pg-shell -- psql -d company-a < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/company-a/table.sql
+kubectl exec -i pg-shell -- psql -d company-a < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/company-a/data.sql
 SELECT pg_catalog.set_config('search_path', '', false);
-CREATE DATABASE markets;
+CREATE DATABASE company-a;
 CREATE TABLE
 INSERT 0 1
 INSERT 0 1
@@ -430,20 +541,43 @@ INSERT 0 1
 INSERT 0 1
 ~~~
 
-## Step 12: Access the product table from any site
-
-Now that data has been added, try to read them from both the **west** and **east** sites.
-
-_**West namespace on public cluster:**_
+_**Company B public cluster:**_
 
 ~~~ shell
-echo "SELECT * FROM product;" | kubectl exec -i pg-shell -- psql -d markets
+kubectl exec pg-shell -- createdb -e company-b
+kubectl exec -i pg-shell -- psql -d company-b < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/company-b/table.sql
+kubectl exec -i pg-shell -- psql -d company-b < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/company-b/data.sql
 ~~~
 
-_**East namespace on private cluster:**_
+_Sample output:_
+
+~~~ console
+$ kubectl exec pg-shell -- createdb -e company-b
+kubectl exec -i pg-shell -- psql -d company-b < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/company-b/table.sql
+kubectl exec -i pg-shell -- psql -d company-b < ~/pg-demo/skupper-example-postgresql-attached-connector/sql/company-b/data.sql
+SELECT pg_catalog.set_config('search_path', '', false);
+CREATE DATABASE company-b;
+CREATE TABLE
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+~~~
+
+## Step 12: Access the product table from both sites
+
+Now that data has been added, try to read them from both **company-a** and **company-b** sites.
+
+_**Company A public cluster:**_
 
 ~~~ shell
-echo "SELECT * FROM product;" | kubectl exec -i pg-shell -- psql -d markets
+echo "SELECT * FROM product;" | kubectl exec -i pg-shell -- psql -d company-a
+~~~
+
+_**Company B public cluster:**_
+
+~~~ shell
+echo "SELECT * FROM product;" | kubectl exec -i pg-shell -- psql -d company-b
 ~~~
 
 ## Cleaning up
@@ -451,40 +585,54 @@ echo "SELECT * FROM product;" | kubectl exec -i pg-shell -- psql -d markets
 Restore your cluster environment by returning the resources created in the demonstration. On each cluster, delete the 
 demo resources and the virtual application Network.
 
-_**West namespace on public cluster:**_
+_**Company A public cluster:**_
 
 ~~~ shell
 kubectl delete pod pg-shell --now
-kubectl delete -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/west/
+kubectl delete -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-a/
 ~~~
 
-_**East namespace on private cluster:**_
+_**Company A private cluster:**_
 
 ~~~ shell
 kubectl delete pod pg-shell --now
-kubectl delete -f ~/west.token -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/east/
+kubectl delete -f ~/company-a.token -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-a/
 ~~~
 
-_**East internal namespace on private cluster:**_
+_**Company B public cluster:**_
 
 ~~~ shell
-kubectl delete -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/east-internal/
+kubectl delete pod pg-shell --now
+kubectl delete -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-b/
+~~~
+
+_**Company B private cluster:**_
+
+~~~ shell
+kubectl delete pod pg-shell --now
+kubectl delete -f ~/company-b.token -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/company-b/
+~~~
+
+_**Internal namespace on private cluster:**_
+
+~~~ shell
+kubectl delete -f ~/pg-demo/skupper-example-postgresql-attached-connector/kubernetes/internal/
 ~~~
 
 ## Summary
 
 Through this example, we demonstrated how Skupper enables secure access to a PostgreSQL database hosted in a
-private Kubernetes cluster and on a namespace that is not connected to the Virtual Application Network, without exposing it to the public internet.
+private Kubernetes cluster, on a namespace that is not connected to any Virtual Application Network, without exposing it to the public internet.
 
-By deploying Skupper in each namespace, we established a **Virtual Application Network** (VAN), which allowed
-the PostgreSQL service to be securely shared across clusters.
+By deploying Skupper in each namespace, we established two **Virtual Application Networks** (VANs), which allowed
+the PostgreSQL service to be securely shared across the two distinct VANs.
 
-The **AttachedConnector** and the **AttachedConnectorBinding** provided by Skupper, allows you to provide a granular definition on which
-workloads can be exposed by Skupper sites running on different namespaces. Namespaces that are not explicitly allowed through **AttachedConnectors**
+The **AttachedConnector** and the **AttachedConnectorBinding** provided by Skupper, allows you to set a granular definition on which
+workloads can be bound by Skupper sites running on different local namespaces. Namespaces that are not explicitly allowed through **AttachedConnectors**,
 cannot bind pods and cannot expose them into the VAN.
 
-It is important to emphasize that the database was made available exclusively within the VAN in which the **east** namespace of the private cluster,
-is a member of. With that, applications in the **west** (public cluster) and **east** (private cluster) namespaces, are able to access it seamlessly,
+It is important to emphasize that the database was made available exclusively within the VANs authorized by the **Attached Connectors**,
+where matching **Attached Connector Bindings** have been defined. With that, applications in the public clusters, are able to access it seamlessly,
 as if it were running locally in their own namespaces.
 
 This approach not only simplifies multi-cluster communication but also preserves strict network boundaries, eliminating the need for complex VPNs or

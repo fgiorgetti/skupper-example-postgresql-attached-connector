@@ -1,0 +1,7 @@
+apiVersion: skupper.io/v2alpha1
+kind: AccessGrant
+metadata:
+  name: company-a-grant
+  namespace: company-a
+spec:
+  redemptionsAllowed: 1

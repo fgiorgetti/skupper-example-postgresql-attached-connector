@@ -1,7 +1,0 @@
-apiVersion: skupper.io/v2alpha1
-kind: AccessGrant
-metadata:
-  name: west-grant
-  namespace: west
-spec:
-  redemptionsAllowed: 2
